@@ -1,0 +1,949 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Block Blast - 經典方塊消除</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700;800&display=swap');
+
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: none;
+        }
+
+        body {
+            font-family: 'Fredoka', system-ui, -apple-system, sans-serif;
+            background: radial-gradient(circle at center, #1e1b4b 0%, #0f172a 100%);
+            color: #f8fafc;
+            overflow: hidden;
+        }
+
+        .board-grid {
+            display: grid;
+            grid-template-columns: repeat(8, minmax(0, 1fr));
+            grid-template-rows: repeat(8, minmax(0, 1fr));
+            gap: 6px;
+            background-color: rgba(30, 41, 59, 0.75);
+            border: 4px solid #334155;
+            box-shadow: inset 0 4px 12px rgba(0, 0, 0, 0.6), 0 10px 25px rgba(0, 0, 0, 0.5);
+        }
+
+        .cell {
+            background-color: rgba(15, 23, 42, 0.65);
+            border-radius: 6px;
+            transition: background-color 0.15s ease, transform 0.15s ease;
+            position: relative;
+        }
+
+        /* 方塊立體色彩與漸層樣式 */
+        .block-tile {
+            border-radius: 6px;
+            box-shadow: inset 0 3px 0 rgba(255, 255, 255, 0.35), inset 0 -3px 0 rgba(0, 0, 0, 0.25), 0 2px 4px rgba(0, 0, 0, 0.3);
+            transition: transform 0.1s ease;
+        }
+
+        /* 經典鮮豔配色主題 */
+        .color-1 { background: linear-gradient(135deg, #38bdf8, #0284c7); border: 1px solid #7dd3fc; } /* 青藍 */
+        .color-2 { background: linear-gradient(135deg, #f43f5e, #be123c); border: 1px solid #fda4af; } /* 玫瑰紅 */
+        .color-3 { background: linear-gradient(135deg, #10b981, #047857); border: 1px solid #6ee7b7; } /* 翡翠綠 */
+        .color-4 { background: linear-gradient(135deg, #f59e0b, #b45309); border: 1px solid #fde68a; } /* 琥珀黃 */
+        .color-5 { background: linear-gradient(135deg, #a855f7, #6b21a8); border: 1px solid #d8b4fe; } /* 紫羅蘭 */
+        .color-6 { background: linear-gradient(135deg, #ec4899, #be185d); border: 1px solid #fbcfe8; } /* 浪漫粉 */
+        .color-7 { background: linear-gradient(135deg, #3b82f6, #1d4ed8); border: 1px solid #93c5fd; } /* 寶藍色 */
+
+        /* Ghost Preview 半透明預覽動畫 */
+        .ghost-valid {
+            opacity: 0.6;
+            animation: pulse-ghost 0.8s infinite alternate;
+        }
+        
+        .ghost-invalid {
+            background-color: rgba(239, 68, 68, 0.45) !important;
+            border: 2px solid #ef4444 !important;
+        }
+
+        @keyframes pulse-ghost {
+            from { opacity: 0.45; }
+            to { opacity: 0.8; }
+        }
+
+        /* 消除爆破特效動畫 */
+        .clearing {
+            animation: clear-pop 0.35s ease-out forwards;
+        }
+
+        @keyframes clear-pop {
+            0% { transform: scale(1); filter: brightness(1.6); }
+            50% { transform: scale(1.18); filter: brightness(2.2); }
+            100% { transform: scale(0); opacity: 0; }
+        }
+
+        /* 得分浮動上升數字 */
+        .score-float {
+            position: absolute;
+            font-weight: 800;
+            color: #fde047;
+            text-shadow: 0 2px 8px rgba(0, 0, 0, 0.9), 0 0 12px #eab308;
+            pointer-events: none;
+            animation: float-up 0.85s cubic-bezier(0.18, 0.89, 0.32, 1.28) forwards;
+            z-index: 50;
+        }
+
+        @keyframes float-up {
+            0% { opacity: 1; transform: translate(-50%, 0) scale(0.8); }
+            50% { opacity: 1; transform: translate(-50%, -28px) scale(1.25); }
+            100% { opacity: 0; transform: translate(-50%, -52px) scale(1); }
+        }
+
+        /* 拖曳中的虛擬跟隨物件 */
+        #drag-avatar {
+            position: fixed;
+            pointer-events: none;
+            z-index: 1000;
+            transform: translate(-50%, -50%);
+            display: grid;
+            gap: 4px;
+            filter: drop-shadow(0 14px 24px rgba(0, 0, 0, 0.7));
+            transition: transform 0.05s linear;
+        }
+
+        #drag-avatar.hidden {
+            display: none !important;
+        }
+
+        .dock-item {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: grab;
+            transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+
+        .dock-item:active {
+            cursor: grabbing;
+        }
+
+        .dock-item.disabled {
+            opacity: 0.35;
+            filter: grayscale(0.85);
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body class="flex flex-col items-center justify-between min-h-screen p-4 max-w-lg mx-auto">
+
+    <!-- 頂部計分板與選單區塊 -->
+    <header class="w-full flex flex-col items-center gap-3 mt-1">
+        <div class="flex items-center justify-between w-full px-2">
+            <h1 class="text-3xl sm:text-4xl font-black tracking-wider bg-clip-text text-transparent bg-gradient-to-r from-amber-300 via-rose-400 to-cyan-300 drop-shadow-md">
+                BLOCK BLAST
+            </h1>
+            <button id="btn-sound" class="bg-slate-800 hover:bg-slate-700 text-slate-200 p-2.5 rounded-2xl border border-slate-600/80 transition shadow-md active:scale-95">
+                🔊
+            </button>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4 w-full">
+            <div class="bg-slate-800/80 border border-slate-700/80 rounded-2xl p-3 flex flex-col items-center shadow-lg backdrop-blur">
+                <span class="text-xs font-bold text-slate-400 tracking-widest">SCORE</span>
+                <span id="score-text" class="text-3xl font-black text-amber-400 drop-shadow">0</span>
+            </div>
+            <div class="bg-slate-800/80 border border-slate-700/80 rounded-2xl p-3 flex flex-col items-center shadow-lg backdrop-blur">
+                <span class="text-xs font-bold text-slate-400 tracking-widest">BEST</span>
+                <span id="high-score-text" class="text-3xl font-black text-cyan-400 drop-shadow">0</span>
+            </div>
+        </div>
+
+        <!-- 連擊 Streak 提示動畫標籤 -->
+        <div id="streak-badge" class="opacity-0 transition-all duration-300 bg-gradient-to-r from-amber-500 via-rose-500 to-purple-600 text-white text-sm font-extrabold px-5 py-1 rounded-full shadow-lg border border-amber-300/60 animate-bounce">
+            STREAK x<span id="streak-count">1</span> 🔥
+        </div>
+    </header>
+
+    <!-- 中央 8x8 遊戲棋盤區塊 -->
+    <main class="w-full flex items-center justify-center my-auto py-2">
+        <div id="board" class="board-grid w-full aspect-square p-2 rounded-2xl relative">
+            <!-- 64 個網格單元由 JS 動態生成 -->
+        </div>
+    </main>
+
+    <!-- 底部 3 個候補方塊放置區 -->
+    <footer class="w-full flex flex-col gap-3 mb-1">
+        <div id="dock" class="grid grid-cols-3 gap-3 w-full h-28 bg-slate-800/60 border border-slate-700/70 rounded-2xl p-2 items-center justify-items-center backdrop-blur shadow-inner">
+            <div class="dock-slot w-full h-full flex items-center justify-center" data-slot="0"></div>
+            <div class="dock-slot w-full h-full flex items-center justify-center" data-slot="1"></div>
+            <div class="dock-slot w-full h-full flex items-center justify-center" data-slot="2"></div>
+        </div>
+
+        <div class="flex justify-between items-center w-full px-1">
+            <button id="btn-restart" class="w-full bg-slate-800 hover:bg-slate-700 border border-slate-600/80 text-slate-200 font-bold py-2.5 rounded-xl transition shadow flex items-center justify-center gap-2 active:scale-95">
+                🔄 重新開始對局
+            </button>
+        </div>
+    </footer>
+
+    <!-- 遊戲結束 Modal -->
+    <div id="game-over-modal" class="fixed inset-0 bg-black/80 backdrop-blur-md hidden flex-col items-center justify-center z-50 p-6">
+        <div class="bg-slate-800 border-2 border-slate-600/80 rounded-3xl p-8 max-w-sm w-full text-center shadow-2xl flex flex-col items-center gap-5 transform transition-all scale-95 opacity-0" id="modal-card">
+            <div class="text-6xl animate-bounce">💥</div>
+            <h2 class="text-3xl font-black text-rose-400 tracking-wide">無處可放！</h2>
+            <p class="text-slate-300 text-sm font-medium">剩餘所有方塊皆無法填入當前棋盤中</p>
+
+            <div class="w-full bg-slate-900/80 rounded-2xl p-4 border border-slate-700/80 flex flex-col gap-2">
+                <div class="flex justify-between items-center">
+                    <span class="text-slate-400 font-semibold">本局得分</span>
+                    <span id="final-score" class="text-2xl font-black text-amber-400">0</span>
+                </div>
+                <div class="flex justify-between items-center border-t border-slate-800 pt-2">
+                    <span class="text-slate-400 font-semibold">最高紀錄</span>
+                    <span id="modal-high-score" class="text-xl font-bold text-cyan-400">0</span>
+                </div>
+            </div>
+
+            <button id="btn-modal-restart" class="w-full bg-gradient-to-r from-amber-500 via-rose-500 to-purple-600 hover:from-amber-600 hover:to-purple-700 text-white font-extrabold py-3.5 rounded-2xl shadow-xl transition active:scale-95 text-lg tracking-wider">
+                再玩一局 🚀
+            </button>
+        </div>
+    </div>
+
+    <!-- 拖曳時跟隨游標/手指的虛擬物件 -->
+    <div id="drag-avatar" class="hidden"></div>
+
+    <script>
+        // 音效合成器（使用原生 Web Audio API，無需外部音效檔）
+        class SoundEngine {
+            constructor() {
+                this.ctx = null;
+                this.enabled = true;
+            }
+
+            init() {
+                if (!this.ctx) {
+                    const AudioContext = window.AudioContext || window.webkitAudioContext;
+                    this.ctx = new AudioContext();
+                }
+                if (this.ctx.state === 'suspended') {
+                    this.ctx.resume();
+                }
+            }
+
+            playPickup() {
+                if (!this.enabled) return;
+                this.init();
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(320, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(640, this.ctx.currentTime + 0.08);
+                gain.gain.setValueAtTime(0.15, this.ctx.currentTime);
+                gain.gain.linearRampToValueAtTime(0.01, this.ctx.currentTime + 0.08);
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.08);
+            }
+
+            playPlace() {
+                if (!this.enabled) return;
+                this.init();
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(200, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(100, this.ctx.currentTime + 0.1);
+                gain.gain.setValueAtTime(0.3, this.ctx.currentTime);
+                gain.gain.linearRampToValueAtTime(0.01, this.ctx.currentTime + 0.1);
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.1);
+            }
+
+            playClear(combo = 1) {
+                if (!this.enabled) return;
+                this.init();
+                const baseFreq = 420 + (combo - 1) * 160;
+                const notes = [baseFreq, baseFreq * 1.25, baseFreq * 1.5];
+                
+                notes.forEach((freq, idx) => {
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(freq, this.ctx.currentTime + idx * 0.06);
+                    gain.gain.setValueAtTime(0.2, this.ctx.currentTime + idx * 0.06);
+                    gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + idx * 0.06 + 0.2);
+                    osc.connect(gain);
+                    gain.connect(this.ctx.destination);
+                    osc.start(this.ctx.currentTime + idx * 0.06);
+                    osc.stop(this.ctx.currentTime + idx * 0.06 + 0.2);
+                });
+            }
+
+            playGameOver() {
+                if (!this.enabled) return;
+                this.init();
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(280, this.ctx.currentTime);
+                osc.frequency.linearRampToValueAtTime(70, this.ctx.currentTime + 0.45);
+                gain.gain.setValueAtTime(0.25, this.ctx.currentTime);
+                gain.gain.linearRampToValueAtTime(0.01, this.ctx.currentTime + 0.45);
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.45);
+            }
+        }
+
+        const BOARD_SIZE = 8;
+        const sound = new SoundEngine();
+
+        // 經典 Block Blast 方塊形狀庫
+        const SHAPES = [
+            // 單點與小型組合
+            { shape: [[1]], colorClass: 'color-1' },
+            { shape: [[1, 1]], colorClass: 'color-1' },
+            { shape: [[1], [1]], colorClass: 'color-1' },
+            { shape: [[1, 1], [1, 1]], colorClass: 'color-4' }, // 2x2
+            { shape: [[1, 1, 1], [1, 1, 1], [1, 1, 1]], colorClass: 'color-5' }, // 3x3
+
+            // 直線條 (3, 4, 5 長度)
+            { shape: [[1, 1, 1]], colorClass: 'color-2' },
+            { shape: [[1], [1], [1]], colorClass: 'color-2' },
+            { shape: [[1, 1, 1, 1]], colorClass: 'color-7' },
+            { shape: [[1], [1], [1], [1]], colorClass: 'color-7' },
+            { shape: [[1, 1, 1, 1, 1]], colorClass: 'color-3' },
+            { shape: [[1], [1], [1], [1], [1]], colorClass: 'color-3' },
+
+            // L 型與角落
+            { shape: [[1, 0], [1, 1]], colorClass: 'color-6' },
+            { shape: [[0, 1], [1, 1]], colorClass: 'color-6' },
+            { shape: [[1, 1], [1, 0]], colorClass: 'color-6' },
+            { shape: [[1, 1], [0, 1]], colorClass: 'color-6' },
+            { shape: [[1, 0, 0], [1, 0, 0], [1, 1, 1]], colorClass: 'color-5' },
+            { shape: [[0, 0, 1], [0, 0, 1], [1, 1, 1]], colorClass: 'color-5' },
+
+            // T 型與 Z 型
+            { shape: [[1, 1, 1], [0, 1, 0]], colorClass: 'color-4' },
+            { shape: [[0, 1, 0], [1, 1, 1]], colorClass: 'color-4' },
+            { shape: [[1, 1, 0], [0, 1, 1]], colorClass: 'color-3' },
+            { shape: [[0, 1, 1], [1, 1, 0]], colorClass: 'color-3' }
+        ];
+
+        // 核心狀態變數
+        let boardState = Array(BOARD_SIZE).fill(null).map(() => Array(BOARD_SIZE).fill(null));
+        let dockBlocks = [null, null, null];
+        let score = 0;
+        let highScore = 0;
+        let streak = 0;
+
+        const STORAGE_KEY = 'BLOCK_BLAST_GAME_STATE_V2';
+
+        const boardEl = document.getElementById('board');
+        const dockSlots = [
+            document.querySelector('[data-slot="0"]'),
+            document.querySelector('[data-slot="1"]'),
+            document.querySelector('[data-slot="2"]')
+        ];
+        const dragAvatar = document.getElementById('drag-avatar');
+        const scoreText = document.getElementById('score-text');
+        const highScoreText = document.getElementById('high-score-text');
+        const streakBadge = document.getElementById('streak-badge');
+        const streakCountText = document.getElementById('streak-count');
+        const btnSound = document.getElementById('btn-sound');
+        const btnRestart = document.getElementById('btn-restart');
+        const gameOverModal = document.getElementById('game-over-modal');
+        const modalCard = document.getElementById('modal-card');
+        const btnModalRestart = document.getElementById('btn-modal-restart');
+        const finalScoreText = document.getElementById('final-score');
+        const modalHighScoreText = document.getElementById('modal-high-score');
+
+        // 初始化遊戲流程
+        function initGame() {
+            createBoardUI();
+            loadHighScore();
+            
+            // 優先恢復 LocalStorage 紀錄
+            if (!loadGameState()) {
+                resetNewGame();
+            } else {
+                renderAll();
+            }
+
+            setupEventListeners();
+        }
+
+        // 動態生成 8x8 棋盤 DOM 結構
+        function createBoardUI() {
+            boardEl.innerHTML = '';
+            for (let r = 0; r < BOARD_SIZE; r++) {
+                for (let c = 0; c < BOARD_SIZE; c++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'cell w-full h-full';
+                    cell.dataset.row = r;
+                    cell.dataset.col = c;
+                    boardEl.appendChild(cell);
+                }
+            }
+        }
+
+        // 開啟全新對局
+        function resetNewGame() {
+            boardState = Array(BOARD_SIZE).fill(null).map(() => Array(BOARD_SIZE).fill(null));
+            score = 0;
+            streak = 0;
+            spawnDockBlocks();
+            saveGameState();
+            renderAll();
+        }
+
+        // 隨機生成 3 個候補方塊
+        function spawnDockBlocks() {
+            for (let i = 0; i < 3; i++) {
+                const randomShape = SHAPES[Math.floor(Math.random() * SHAPES.length)];
+                dockBlocks[i] = {
+                    id: Date.now() + '_' + i + '_' + Math.random(),
+                    shape: randomShape.shape,
+                    colorClass: randomShape.colorClass
+                };
+            }
+        }
+
+        // 刷新整體 UI
+        function renderAll() {
+            renderBoard();
+            renderDock();
+            updateScoreDisplay();
+            checkGameOver();
+        }
+
+        // 渲染棋盤內容
+        function renderBoard() {
+            for (let r = 0; r < BOARD_SIZE; r++) {
+                for (let c = 0; c < BOARD_SIZE; c++) {
+                    const cell = boardEl.children[r * BOARD_SIZE + c];
+                    cell.className = 'cell w-full h-full';
+                    cell.innerHTML = '';
+
+                    const cellData = boardState[r][c];
+                    if (cellData) {
+                        const tile = document.createElement('div');
+                        tile.className = `w-full h-full block-tile ${cellData.colorClass}`;
+                        cell.appendChild(tile);
+                    }
+                }
+            }
+        }
+
+        // 渲染底部候補區
+        function renderDock() {
+            dockSlots.forEach((slot, idx) => {
+                slot.innerHTML = '';
+                const blockData = dockBlocks[idx];
+                if (!blockData) return;
+
+                const item = document.createElement('div');
+                item.className = 'dock-item';
+                item.dataset.index = idx;
+
+                const grid = document.createElement('div');
+                grid.style.display = 'grid';
+                grid.style.gridTemplateColumns = `repeat(${blockData.shape[0].length}, 1fr)`;
+                grid.style.gap = '3px';
+
+                // 計算縮放比例 fits dock
+                const maxDim = Math.max(blockData.shape.length, blockData.shape[0].length);
+                const tileSize = maxDim > 3 ? 14 : (maxDim > 2 ? 18 : 22);
+
+                for (let r = 0; r < blockData.shape.length; r++) {
+                    for (let c = 0; c < blockData.shape[0].length; c++) {
+                        const cell = document.createElement('div');
+                        cell.style.width = `${tileSize}px`;
+                        cell.style.height = `${tileSize}px`;
+                        if (blockData.shape[r][c] === 1) {
+                            cell.className = `block-tile ${blockData.colorClass}`;
+                        } else {
+                            cell.style.opacity = '0';
+                        }
+                        grid.appendChild(cell);
+                    }
+                }
+
+                item.appendChild(grid);
+                slot.appendChild(item);
+
+                // 若方塊完全無法填入目前棋盤，進行灰色防呆顯示
+                if (!canPlaceAnywhere(blockData)) {
+                    item.classList.add('disabled');
+                }
+            });
+        }
+
+        // 更新分數與連擊標籤
+        function updateScoreDisplay() {
+            scoreText.textContent = score;
+            highScoreText.textContent = highScore;
+
+            if (score > highScore) {
+                highScore = score;
+                highScoreText.textContent = highScore;
+                saveHighScore();
+            }
+
+            if (streak > 1) {
+                streakBadge.classList.remove('opacity-0');
+                streakCountText.textContent = streak;
+            } else {
+                streakBadge.classList.add('opacity-0');
+            }
+        }
+
+        let activeDrag = null;
+
+        function setupEventListeners() {
+            dockSlots.forEach(slot => {
+                slot.addEventListener('pointerdown', onDragStart);
+            });
+
+            window.addEventListener('pointermove', onDragMove);
+            window.addEventListener('pointerup', onDragEnd);
+            window.addEventListener('pointercancel', onDragEnd);
+
+            btnRestart.addEventListener('click', () => {
+                if (confirmRestart()) resetNewGame();
+            });
+
+            btnModalRestart.addEventListener('click', () => {
+                hideGameOverModal();
+                resetNewGame();
+            });
+
+            btnSound.addEventListener('click', () => {
+                sound.enabled = !sound.enabled;
+                btnSound.textContent = sound.enabled ? '🔊' : '🔇';
+            });
+        }
+
+        function confirmRestart() {
+            return confirm("確定要重新開始對局嗎？目前的進度將會重置。");
+        }
+
+        // 開始拖曳事件 handler
+        function onDragStart(e) {
+            const dockItem = e.target.closest('.dock-item');
+            if (!dockItem || dockItem.classList.contains('disabled')) return;
+
+            const slotIdx = parseInt(dockItem.dataset.index);
+            const blockData = dockBlocks[slotIdx];
+            if (!blockData) return;
+
+            try {
+                dockItem.setPointerCapture(e.pointerId);
+            } catch (err) {}
+
+            sound.playPickup();
+
+            activeDrag = {
+                pointerId: e.pointerId,
+                dockItem: dockItem,
+                slotIdx: slotIdx,
+                blockData: blockData,
+                startX: e.clientX,
+                startY: e.clientY,
+                offsetY: 60 // 抓取上方 60px 避免手指擋住目標位置
+            };
+
+            createDragAvatar(blockData);
+            updateDragAvatarPosition(e.clientX, e.clientY - activeDrag.offsetY);
+            dockItem.style.opacity = '0';
+        }
+
+        // 建立浮動懸浮拖曳物
+        function createDragAvatar(blockData) {
+            dragAvatar.innerHTML = '';
+            dragAvatar.style.gridTemplateColumns = `repeat(${blockData.shape[0].length}, 1fr)`;
+            
+            const sampleCell = boardEl.children[0].getBoundingClientRect();
+            const cellSize = sampleCell.width;
+
+            for (let r = 0; r < blockData.shape.length; r++) {
+                for (let c = 0; c < blockData.shape[0].length; c++) {
+                    const tile = document.createElement('div');
+                    tile.style.width = `${cellSize}px`;
+                    tile.style.height = `${cellSize}px`;
+                    if (blockData.shape[r][c] === 1) {
+                        tile.className = `block-tile ${blockData.colorClass}`;
+                    } else {
+                        tile.style.opacity = '0';
+                    }
+                    dragAvatar.appendChild(tile);
+                }
+            }
+
+            showDragAvatar();
+        }
+
+        function showDragAvatar() {
+            dragAvatar.style.display = 'grid';
+            dragAvatar.classList.remove('hidden');
+        }
+
+        function hideDragAvatar() {
+            dragAvatar.style.display = 'none';
+            dragAvatar.classList.add('hidden');
+            dragAvatar.innerHTML = '';
+        }
+
+        // 拖曳移動處理
+        function onDragMove(e) {
+            if (!activeDrag) return;
+            e.preventDefault();
+
+            const avatarX = e.clientX;
+            const avatarY = e.clientY - activeDrag.offsetY;
+
+            updateDragAvatarPosition(avatarX, avatarY);
+
+            const gridPos = getBoardGridPosition(avatarX, avatarY, activeDrag.blockData);
+            clearGhostPreview();
+
+            if (gridPos) {
+                const isValid = canPlaceShape(activeDrag.blockData.shape, gridPos.row, gridPos.col);
+                showGhostPreview(activeDrag.blockData, gridPos.row, gridPos.col, isValid);
+            }
+        }
+
+        function updateDragAvatarPosition(x, y) {
+            dragAvatar.style.left = `${x}px`;
+            dragAvatar.style.top = `${y}px`;
+        }
+
+        // 結束拖曳
+        function onDragEnd(e) {
+            if (!activeDrag) return;
+
+            if (activeDrag.dockItem) {
+                try {
+                    activeDrag.dockItem.releasePointerCapture(e.pointerId);
+                } catch (err) {}
+            }
+
+            const avatarX = e.clientX;
+            const avatarY = e.clientY - activeDrag.offsetY;
+            const gridPos = getBoardGridPosition(avatarX, avatarY, activeDrag.blockData);
+
+            clearGhostPreview();
+            hideDragAvatar();
+
+            let placedSuccess = false;
+
+            if (gridPos) {
+                if (canPlaceShape(activeDrag.blockData.shape, gridPos.row, gridPos.col)) {
+                    placeBlock(activeDrag.blockData, gridPos.row, gridPos.col, activeDrag.slotIdx);
+                    placedSuccess = true;
+                }
+            }
+
+            if (!placedSuccess) {
+                const slot = dockSlots[activeDrag.slotIdx];
+                const dockItem = slot.querySelector('.dock-item');
+                if (dockItem) dockItem.style.opacity = '1';
+            }
+
+            activeDrag = null;
+        }
+
+        // 計算游標對應 8x8 網格左上角 Row, Col
+        function getBoardGridPosition(cursorX, cursorY, blockData) {
+            const boardRect = boardEl.getBoundingClientRect();
+            const cellSize = boardRect.width / BOARD_SIZE;
+
+            const shapeRows = blockData.shape.length;
+            const shapeCols = blockData.shape[0].length;
+
+            const blockWidthPx = shapeCols * cellSize;
+            const blockHeightPx = shapeRows * cellSize;
+
+            const topLeftX = cursorX - blockWidthPx / 2;
+            const topLeftY = cursorY - blockHeightPx / 2;
+
+            const col = Math.round((topLeftX - boardRect.left) / cellSize);
+            const row = Math.round((topLeftY - boardRect.top) / cellSize);
+
+            if (row >= -1 && row <= BOARD_SIZE && col >= -1 && col <= BOARD_SIZE) {
+                return { row, col };
+            }
+            return null;
+        }
+
+        // 檢查形狀能否放置
+        function canPlaceShape(shape, startRow, startCol) {
+            for (let r = 0; r < shape.length; r++) {
+                for (let c = 0; c < shape[0].length; c++) {
+                    if (shape[r][c] === 1) {
+                        const targetR = startRow + r;
+                        const targetC = startCol + c;
+
+                        if (targetR < 0 || targetR >= BOARD_SIZE || targetC < 0 || targetC >= BOARD_SIZE) {
+                            return false;
+                        }
+                        if (boardState[targetR][targetC] !== null) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            return true;
+        }
+
+        // 半透明放置預覽
+        function showGhostPreview(blockData, startRow, startCol, isValid) {
+            const shape = blockData.shape;
+            for (let r = 0; r < shape.length; r++) {
+                for (let c = 0; c < shape[0].length; c++) {
+                    if (shape[r][c] === 1) {
+                        const targetR = startRow + r;
+                        const targetC = startCol + c;
+                        if (targetR >= 0 && targetR < BOARD_SIZE && targetC >= 0 && targetC < BOARD_SIZE) {
+                            const cell = boardEl.children[targetR * BOARD_SIZE + targetC];
+                            if (isValid) {
+                                cell.classList.add('ghost-valid');
+                                const ghostTile = document.createElement('div');
+                                ghostTile.className = `w-full h-full block-tile ${blockData.colorClass} opacity-60`;
+                                cell.appendChild(ghostTile);
+                            } else {
+                                cell.classList.add('ghost-invalid');
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        function clearGhostPreview() {
+            Array.from(boardEl.children).forEach(cell => {
+                cell.classList.remove('ghost-valid', 'ghost-invalid');
+                if (cell.querySelector('.opacity-60')) {
+                    cell.innerHTML = '';
+                }
+            });
+        }
+
+        // 放置方塊並結算消除與分數
+        function placeBlock(blockData, startRow, startCol, slotIdx) {
+            sound.playPlace();
+            let blockTileCount = 0;
+
+            const shape = blockData.shape;
+            for (let r = 0; r < shape.length; r++) {
+                for (let c = 0; c < shape[0].length; c++) {
+                    if (shape[r][c] === 1) {
+                        boardState[startRow + r][startCol + c] = {
+                            colorClass: blockData.colorClass
+                        };
+                        blockTileCount++;
+                    }
+                }
+            }
+
+            dockBlocks[slotIdx] = null;
+            score += blockTileCount;
+
+            renderAll();
+
+            const clearResult = checkAndClearLines();
+
+            if (clearResult.linesCleared > 0) {
+                streak++;
+                const comboBonus = clearResult.linesCleared * 10 * clearResult.linesCleared;
+                const streakBonus = streak * 5;
+                const turnScore = blockTileCount + comboBonus + streakBonus;
+
+                score += comboBonus + streakBonus;
+                sound.playClear(clearResult.linesCleared);
+
+                showScoreFloat(`+${turnScore}`, startRow, startCol);
+
+                setTimeout(() => {
+                    clearResult.cellsToClear.forEach(coord => {
+                        const [r, c] = coord.split(',').map(Number);
+                        boardState[r][c] = null;
+                    });
+                    if (dockBlocks.every(b => b === null)) {
+                        spawnDockBlocks();
+                    }
+                    saveGameState();
+                    renderAll();
+                }, 300);
+            } else {
+                streak = 0;
+                if (dockBlocks.every(b => b === null)) {
+                    spawnDockBlocks();
+                }
+                saveGameState();
+                renderAll();
+            }
+        }
+
+        // 檢查與執行消除
+        function checkAndClearLines() {
+            const rowsToClear = [];
+            const colsToClear = [];
+
+            for (let r = 0; r < BOARD_SIZE; r++) {
+                if (boardState[r].every(cell => cell !== null)) {
+                    rowsToClear.push(r);
+                }
+            }
+
+            for (let c = 0; c < BOARD_SIZE; c++) {
+                let isFull = true;
+                for (let r = 0; r < BOARD_SIZE; r++) {
+                    if (boardState[r][c] === null) {
+                        isFull = false;
+                        break;
+                    }
+                }
+                if (isFull) colsToClear.push(c);
+            }
+
+            const cellsToAnimate = new Set();
+            rowsToClear.forEach(r => {
+                for (let c = 0; c < BOARD_SIZE; c++) cellsToAnimate.add(`${r},${c}`);
+            });
+            colsToClear.forEach(c => {
+                for (let r = 0; r < BOARD_SIZE; r++) cellsToAnimate.add(`${r},${c}`);
+            });
+
+            cellsToAnimate.forEach(coord => {
+                const [r, c] = coord.split(',').map(Number);
+                const cell = boardEl.children[r * BOARD_SIZE + c];
+                if (cell) cell.classList.add('clearing');
+            });
+
+            return {
+                linesCleared: rowsToClear.length + colsToClear.length,
+                cellsToClear: Array.from(cellsToAnimate)
+            };
+        }
+
+        // 得分浮動數字
+        function showScoreFloat(text, r, c) {
+            const floatEl = document.createElement('div');
+            floatEl.className = 'score-float text-2xl';
+            floatEl.textContent = text;
+            
+            const cell = boardEl.children[r * BOARD_SIZE + c] || boardEl;
+            const rect = cell.getBoundingClientRect();
+
+            floatEl.style.left = `${rect.left + rect.width / 2}px`;
+            floatEl.style.top = `${rect.top}px`;
+
+            document.body.appendChild(floatEl);
+
+            setTimeout(() => floatEl.remove(), 850);
+        }
+
+        // 適配性檢查
+        function canPlaceAnywhere(blockData) {
+            if (!blockData) return false;
+            for (let r = 0; r < BOARD_SIZE; r++) {
+                for (let c = 0; c < BOARD_SIZE; c++) {
+                    if (canPlaceShape(blockData.shape, r, c)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // 檢查 Game Over
+        function checkGameOver() {
+            const activeBlocks = dockBlocks.filter(b => b !== null);
+            if (activeBlocks.length === 0) return;
+
+            const canAnyMove = activeBlocks.some(block => canPlaceAnywhere(block));
+
+            if (!canAnyMove) {
+                sound.playGameOver();
+                setTimeout(() => {
+                    showGameOverModal();
+                }, 400);
+            }
+        }
+
+        function showGameOverModal() {
+            finalScoreText.textContent = score;
+            modalHighScoreText.textContent = highScore;
+            gameOverModal.classList.remove('hidden');
+            gameOverModal.classList.add('flex');
+            setTimeout(() => {
+                modalCard.classList.remove('scale-95', 'opacity-0');
+                modalCard.classList.add('scale-100', 'opacity-100');
+            }, 10);
+            
+            localStorage.removeItem(STORAGE_KEY);
+        }
+
+        function hideGameOverModal() {
+            modalCard.classList.remove('scale-100', 'opacity-100');
+            modalCard.classList.add('scale-95', 'opacity-0');
+            setTimeout(() => {
+                gameOverModal.classList.remove('flex');
+                gameOverModal.classList.add('hidden');
+            }, 200);
+        }
+
+        // LocalStorage 持久化儲存與還原
+        function saveGameState() {
+            const data = {
+                boardState,
+                dockBlocks,
+                score,
+                streak
+            };
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+        }
+
+        function loadGameState() {
+            try {
+                const raw = localStorage.getItem(STORAGE_KEY);
+                if (!raw) return false;
+                const data = JSON.parse(raw);
+                if (data && data.boardState) {
+                    boardState = data.boardState;
+                    dockBlocks = data.dockBlocks;
+                    score = data.score || 0;
+                    streak = data.streak || 0;
+                    return true;
+                }
+            } catch (e) {
+                console.error("Failed to load saved game state", e);
+            }
+            return false;
+        }
+
+        function saveHighScore() {
+            localStorage.setItem('BLOCK_BLAST_HIGH_SCORE_V2', highScore.toString());
+        }
+
+        function loadHighScore() {
+            const saved = localStorage.getItem('BLOCK_BLAST_HIGH_SCORE_V2');
+            if (saved) {
+                highScore = parseInt(saved, 10) || 0;
+            }
+        }
+
+        // 啟動遊戲
+        window.addEventListener('load', initGame);
+    </script>
+</body>
+</html>
